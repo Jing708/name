@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#f7f8fc" />
+  <title>拾光 · 學生日程</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="auth.css" />
+  <link rel="stylesheet" href="dates.css" />
+  <link rel="stylesheet" href="calendar.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="#" aria-label="拾光首頁"><span class="brand-icon">✳</span><span>拾光<span class="brand-dot">.</span></span></a>
+      <div class="account-card" id="account-card"><div class="account-avatar" id="account-avatar">✳</div><div class="account-copy"><strong id="account-name">尚未登入</strong><span id="account-status">登入以同步行程</span></div><button id="auth-button" class="auth-button" type="button">Google 登入</button></div>
+      <p class="nav-label">工作空間</p>
+      <nav class="main-nav" aria-label="主要導覽">
+        <a class="nav-item active" href="#today"><span class="nav-icon">▦</span>今日課表</a>
+        <a class="nav-item" href="#tasks"><span class="nav-icon">◷</span>待辦清單<span class="nav-count">3</span></a>
+        <a class="nav-item" href="#add-event"><span class="nav-icon">＋</span>新增行程</a>
+      </nav>
+      
+    </aside>
+
+    <main class="main-content" id="today">
+      <header class="topbar"><div class="breadcrumb">我的工作空間 <span>/</span> <strong>學生行程表</strong></div><div class="top-actions"><span class="date-chip" id="header-date"></span><button class="icon-button" id="theme-toggle" aria-label="切換深色模式" title="切換深色模式">☼</button></div></header>
+      <div class="dashboard">
+        <section class="welcome-row"><div><div class="eyebrow"><span class="live-dot"></span>學生每日規劃</div><h1>學生行程表 <span class="wave">✳</span></h1><p class="welcome-subtitle">今天日期：<strong id="today-date"></strong>　<span id="day-name"></span></p></div></section>
+        <section class="stats-grid" aria-label="行程概況"><article class="stat-card"><div class="stat-top"><span id="stat-schedule-label">今日課表</span><span class="stat-icon lilac">▤</span></div><strong id="stat-classes">0 <small>筆</small></strong><div class="stat-foot"><span class="tiny-dot purple-dot"></span>自己填寫的安排</div></article><article class="stat-card"><div class="stat-top"><span>待辦事項</span><span class="stat-icon peach">◷</span></div><strong><span id="stat-tasks">3</span> <small>件</small></strong><div class="stat-foot"><span class="tiny-dot orange-dot"></span>完成狀態一目了然</div></article><article class="quote-card"><span class="quote-sparkle">✳</span><p>今天的小進步，<br>也是很棒的進步。</p><span>Make today count.</span><span class="quote-flower">✿</span></article></section>
+        <div class="content-grid">
+          <section class="panel schedule-panel calendar-panel" id="schedule"><div class="panel-heading calendar-heading"><div><div class="section-kicker">YOUR CALENDAR</div><h2 id="calendar-month-label"></h2></div><div class="calendar-controls"><button class="date-nav-button" id="previous-month" type="button" aria-label="上個月">‹</button><button class="today-button" id="go-today" type="button">今天</button><button class="date-nav-button" id="next-month" type="button" aria-label="下個月">›</button></div></div><div class="calendar-weekdays" aria-hidden="true"><span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span></div><div class="calendar-grid" id="calendar-grid" role="grid" aria-label="月曆"></div><section class="day-agenda" aria-labelledby="selected-day-label"><div class="agenda-heading"><h3 id="selected-day-label">選取日期的行程</h3><span id="agenda-count" class="heading-count">0</span></div><div class="timeline" id="timeline"></div></section></section>
+          <aside class="right-column"><section class="panel tasks-panel" id="tasks"><div class="panel-heading task-heading"><div><div class="section-kicker">STAY ON TRACK</div><h2>幫我計畫 <span class="heading-count" id="task-heading-count">3</span></h2></div><label class="plan-time-field" for="plan-time"><span>記錄時間</span><input id="plan-time" type="time" aria-label="幫我計畫的記錄時間"></label></div><div class="task-list" id="task-list"></div><div class="task-progress"><div class="progress-label"><span>今日完成度</span><strong id="progress-text">1 / 3</strong></div><div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div></div></section><section class="focus-card"><div class="focus-top"><span class="focus-icon">◉</span><span class="focus-tag">小小提醒</span></div><h3>留一點時間<br>給自己喘口氣。</h3><p>休息不是偷懶，是為了<br>走得更遠一點。</p><div class="focus-bottom"><span>好好照顧自己，今天也辛苦了</span><span>♡</span></div><span class="focus-decoration">✿</span></section></aside>
+        </div>
+        <section class="panel add-event-panel" id="add-event" aria-labelledby="add-event-heading"><div class="panel-heading"><div><div class="section-kicker">YOUR OWN PLAN</div><h2 id="add-event-heading">新增行程</h2></div><span class="stat-icon lilac">＋</span></div><form id="event-form" class="event-form"><label class="plan-type-field">選擇新增類型<select name="planType" id="plan-type"><option value="daily">每日行程</option><option value="monthly">月計畫</option><option value="yearly">年度計畫</option></select></label><label>名稱<input name="title" required maxlength="60" placeholder="請填寫計畫或行程名稱"></label><label class="daily-only-field" hidden>日期（選填）<input name="date" id="daily-date" type="date"></label><div class="form-row plan-date-fields" id="plan-date-fields" hidden><label id="plan-start-date-label">開始月份<input name="startDate" id="plan-start-date" type="month"></label><label id="plan-end-date-label">結束月份<input name="endDate" id="plan-end-date" type="month"></label></div><p class="optional-planning-note daily-only-field" hidden>日期與時間可留空；填入日期的計畫會顯示在月曆。</p><div class="form-row daily-time-fields" id="daily-time-fields"><label>開始時間（選填）<input name="start" type="time"></label><label>結束時間（選填）<input name="end" type="time"></label></div><label class="daily-only-field">地點<input name="location" maxlength="40" placeholder="請填寫地點（選填）"></label><label class="daily-only-field">分類<select name="category"><option value="study">讀書</option><option value="class">課程</option><option value="life">生活</option><option value="club">社團</option></select></label><label class="plan-notes-field">計畫內容／備註<textarea name="notes" rows="3" maxlength="240" placeholder="寫下這個計畫的重點（選填）"></textarea></label><button class="primary-button submit-button" type="submit"><span id="submit-label">加入每日行程</span><span>→</span></button></form><section class="saved-plans" aria-labelledby="saved-plans-heading"><h3 id="saved-plans-heading">已儲存計畫</h3><div id="plan-list" class="plan-list"></div></section></section>
+        <footer class="footer-note">用一點點計畫，換一整天從容。 <span>✳</span></footer>
+      </div>
+    </main>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
