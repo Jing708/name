@@ -20,9 +20,31 @@ import { firebaseConfig } from './firebase-config.js';
   let selectedDate = dateKey(today);
   let calendarMonth = new Date(today.getFullYear(), today.getMonth(), 1);
   const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+  function makeWelcomeSchedule() {
+    const date = dateKey(new Date());
+    const examples = [
+      { suffix: 'study', title: '範例：晨間讀書', start: '09:00', end: '10:30', category: 'study', location: '自習室' },
+      { suffix: 'class', title: '範例：課程安排', start: '13:30', end: '15:00', category: 'class', location: '教室' },
+      { suffix: 'life', title: '範例：休息與散步', start: '', end: '', category: 'life', location: '附近公園' }
+    ];
+    return {
+      events: examples.map((item) => ({ id: `sample-e-${item.suffix}`, planId: `sample-p-${item.suffix}`, date, ...item, isSample: true })),
+      plans: examples.map((item) => ({ id: `sample-p-${item.suffix}`, type: 'daily', date, ...item, createdAt: Date.now() }))
+    };
+  }
+  function ensureInitialSchedule(value) {
+    if (value.welcomeScheduleInitialized) return value;
+    if (!value.events.length && !value.plans.length) {
+      const examples = makeWelcomeSchedule();
+      value.events = examples.events;
+      value.plans = examples.plans;
+    }
+    value.welcomeScheduleInitialized = true;
+    return value;
+  }
   const defaultState = () => ({
-      events: [],
-      plans: [],
+      ...makeWelcomeSchedule(),
+      welcomeScheduleInitialized: true,
       tasks: [
         { id: 't1', title: '完成數學作業', subtitle: '今天到期', priority: 'high', completed: false },
         { id: 't2', title: '複習英文單字', subtitle: '今天複習', priority: 'medium', completed: true },
@@ -30,7 +52,7 @@ import { firebaseConfig } from './firebase-config.js';
       ]
     });
   function loadState() {
-    try { const s = JSON.parse(localStorage.getItem(STORAGE_KEY)); if (s && Array.isArray(s.events) && Array.isArray(s.tasks)) { if (!Array.isArray(s.goals)) s.goals = []; if (!Array.isArray(s.plans)) s.plans = []; return s; } }
+    try { const s = JSON.parse(localStorage.getItem(STORAGE_KEY)); if (s && Array.isArray(s.events) && Array.isArray(s.tasks)) { if (!Array.isArray(s.goals)) s.goals = []; if (!Array.isArray(s.plans)) s.plans = []; return ensureInitialSchedule(s); } }
     catch (error) { console.warn('無法讀取已儲存的行程，將使用空白行程與範例待辦。', error); }
     return defaultState();
   }
@@ -62,7 +84,10 @@ import { firebaseConfig } from './firebase-config.js';
         try {
           const ref = doc(firestore, 'users', user.uid, 'planner', 'state');
           const snapshot = await getDoc(ref);
-          if (snapshot.exists()) state = { ...defaultState(), ...snapshot.data() };
+          if (snapshot.exists()) {
+            const cloudState = snapshot.data();
+            state = ensureInitialSchedule({ ...defaultState(), ...cloudState, welcomeScheduleInitialized: cloudState.welcomeScheduleInitialized === true });
+          }
           else await setDoc(ref, state);
           cloudReady = true;
           render();
@@ -148,9 +173,10 @@ import { firebaseConfig } from './firebase-config.js';
   function renderTimeline() {
     const events = state.events.filter((e) => e.date === selectedDate).sort((a, b) => a.start.localeCompare(b.start));
     const el = document.getElementById('timeline');
-    document.getElementById('agenda-count').textContent = events.length;
-    if (!events.length) { el.innerHTML = '<div class="empty-day">這天還沒有安排，點選「新增計畫」填寫日期或時間 ✳</div>'; return; }
-    el.innerHTML = events.map((e) => {
+    const periodPlans = state.plans.filter((plan) => planCoversDate(plan, selectedDate));
+    document.getElementById('agenda-count').textContent = events.length + periodPlans.length;
+    if (!events.length && !periodPlans.length) { el.innerHTML = '<div class="empty-day">這天還沒有安排，新增計畫並選擇日期即可 ✳</div>'; return; }
+    const eventRows = events.map((e) => {
       const hasTime = e.start && e.end;
       const timeLabel = hasTime ? `${escapeHtml(e.start)}–${escapeHtml(e.end)}` : '全天';
       let duration = '時間彈性';
@@ -159,8 +185,10 @@ import { firebaseConfig } from './firebase-config.js';
         const mins = Math.max(0, eh * 60 + em - sh * 60 - sm);
         duration = mins >= 60 ? `${Math.floor(mins / 60)}小時${mins % 60 ? ` ${mins % 60}分` : ''}` : `${mins}分鐘`;
       }
-      return `<article class="timeline-row"><time class="timeline-time">${timeLabel}</time><span class="timeline-marker"><span class="marker-dot"></span></span><div class="event-card category-${escapeHtml(e.category)}"><div><div class="event-title">${escapeHtml(e.title)}</div><div class="event-meta"><span>⌖ ${escapeHtml(e.location || '未設定地點')}</span><span>${escapeHtml(categoryLabels[e.category] || '行程')}</span></div></div><span class="event-duration">${duration}</span></div></article>`;
+      return `<article class="timeline-row"><time class="timeline-time">${timeLabel}</time><span class="timeline-marker"><span class="marker-dot"></span></span><div class="event-card category-${escapeHtml(e.category)}"><div><div class="event-title">${escapeHtml(e.title)}</div><div class="event-meta"><span>⌖ ${escapeHtml(e.location || '未設定地點')}</span><span>${escapeHtml(categoryLabels[e.category] || '行程')}</span></div></div><span class="event-duration">${duration}</span><button class="event-delete-button" type="button" data-delete-event="${escapeHtml(e.id)}" aria-label="刪除行程：${escapeHtml(e.title)}">×</button></div></article>`;
     }).join('');
+    const periodRows = periodPlans.map((plan) => `<article class="period-agenda-row"><span class="period-agenda-tag">${escapeHtml(planTypeLabels[plan.type])}</span><strong>${escapeHtml(plan.title)}</strong></article>`).join('');
+    el.innerHTML = `${eventRows}${periodRows}`;
   }
   function renderTasks() {
     document.getElementById('task-list').innerHTML = state.tasks.length ? state.tasks.map((t) => `<div class="task-row ${t.completed ? 'completed' : ''}"><button class="task-checkbox ${t.completed ? 'checked' : ''}" data-task="${escapeHtml(t.id)}" aria-label="${t.completed ? '標記未完成' : '標記完成'}：${escapeHtml(t.title)}" aria-pressed="${t.completed}">${t.completed ? '✓' : ''}</button><div class="task-copy"><div class="task-title">${escapeHtml(t.title)}</div><div class="task-subtitle">${escapeHtml(t.subtitle)}</div></div><span class="priority ${escapeHtml(t.priority)}">${escapeHtml(priorityLabels[t.priority] || '普通')}</span></div>`).join('') : '<div class="empty-day">清單空空的，今天可以安心專注 ✳</div>';
@@ -215,7 +243,7 @@ import { firebaseConfig } from './firebase-config.js';
     const type = planTypeSelect.value, isDaily = type === 'daily', isYearly = type === 'yearly';
     document.getElementById('daily-time-fields').hidden = !isDaily;
     eventForm.querySelectorAll('.daily-only-field').forEach((field) => { field.hidden = !isDaily; });
-    document.getElementById('daily-date').required = false;
+    document.getElementById('daily-date').required = isDaily;
     document.getElementById('daily-date').value = selectedDate;
     eventForm.elements.start.required = false;
     eventForm.elements.end.required = false;
@@ -251,11 +279,13 @@ import { firebaseConfig } from './firebase-config.js';
     if (type === 'daily') {
       const start = String(values.get('start')), end = String(values.get('end'));
       const planDate = String(values.get('date') || '');
+      if (!planDate) { showToast('請選擇行程日期（年、月、日）'); document.getElementById('daily-date').focus(); return; }
       if (Boolean(start) !== Boolean(end)) { showToast('開始與結束時間請都填寫，或都留空'); return; }
       if (start && end && end <= start) { showToast('結束時間需要晚於開始時間'); eventForm.elements.end.focus(); return; }
-      state.plans.push({ id: `p-${Date.now()}`, type, title, date: planDate, start, end, location: String(values.get('location')).trim(), category: String(values.get('category')), notes: String(values.get('notes')).trim(), createdAt: Date.now() });
+      const planId = `p-${Date.now()}`;
+      state.plans.push({ id: planId, type, title, date: planDate, start, end, location: String(values.get('location')).trim(), category: String(values.get('category')), notes: String(values.get('notes')).trim(), createdAt: Date.now() });
       if (planDate) {
-        state.events.push({ id: `e-${Date.now()}`, date: planDate, start, end, title, location: String(values.get('location')).trim(), category: String(values.get('category')) });
+        state.events.push({ id: `e-${Date.now()}`, planId, date: planDate, start, end, title, location: String(values.get('location')).trim(), category: String(values.get('category')) });
         selectedDate = planDate;
         calendarMonth = new Date(Number(planDate.slice(0, 4)), Number(planDate.slice(5, 7)) - 1, 1);
       }
@@ -269,8 +299,19 @@ import { firebaseConfig } from './firebase-config.js';
   document.getElementById('plan-list').addEventListener('click', (event) => {
     const button = event.target.closest('[data-delete-plan]');
     if (!button) return;
-    state.plans = state.plans.filter((plan) => plan.id !== button.dataset.deletePlan);
-    save(); renderPlans(); showToast('已刪除計畫');
+    const planId = button.dataset.deletePlan;
+    state.plans = state.plans.filter((plan) => plan.id !== planId);
+    state.events = state.events.filter((item) => item.planId !== planId);
+    save(); render(); showToast('已刪除計畫');
+  });
+  document.getElementById('timeline').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-delete-event]');
+    if (!button) return;
+    const eventId = button.dataset.deleteEvent;
+    const item = state.events.find((entry) => entry.id === eventId);
+    state.events = state.events.filter((entry) => entry.id !== eventId);
+    if (item?.planId) state.plans = state.plans.filter((plan) => plan.id !== item.planId);
+    save(); render(); showToast('已刪除行程');
   });
   const planTimeInput = document.getElementById('plan-time');
   try { planTimeInput.value = localStorage.getItem('shiguang-plan-time') || ''; } catch (_) { /* 本機儲存不可用時仍可輸入時間。 */ }

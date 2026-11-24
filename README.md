@@ -1,6 +1,6 @@
 # 拾光・行程管理
 
-以原生 HTML、CSS、JavaScript 製作的繁體中文行程管理系統。Firebase Authentication 提供 Google 登入，Cloud Firestore 依登入者 UID 儲存各自的行程、計畫與待辦。未設定 Firebase 時，仍可使用瀏覽器本機儲存模式。
+以原生 HTML、CSS、JavaScript 製作的繁體中文行事曆。Google 登入使用 Firebase Authentication，行程與完成狀態依登入者 UID 儲存於 Cloud Firestore；未登入時使用瀏覽器本機儲存。
 
 ## Firebase 設定
 
@@ -18,6 +18,8 @@ Firestore 資料存放於 `users/{uid}/planner/state`，規則限制使用者只
 ## 功能
 
 - Google 登入與登出，行程資料依帳號同步至 Firestore。
-- 以月曆檢視每日行程與月／年度計畫；每日計畫的日期與時間可留空，月計畫與年度計畫可設定起訖期間。
-- 管理待辦及完成進度。
+- 月曆顯示每日行程、月計畫與年度計畫；點選事件可查看、修改或刪除。
+- 每日行程必須選擇完整日期，時間可不填；月計畫選擇月份，年度計畫選擇年份。
+- 待辦事項由未完成的每日行程自動產生，標記完成後會更新月曆與 Firestore。
+- 首次開啟會顯示可刪除的範例行程；行事曆名稱可使用 Google 顯示名稱或自訂。
 - 本機儲存後援、響應式版面與深色模式。
