@@ -35,7 +35,7 @@
   }
 
   function defaultState() {
-    return { ...makeWelcomeSchedule(), welcomeCalendarInitialized: true, workspaceTitle: '' };
+    return { ...makeWelcomeSchedule(), welcomeCalendarInitialized: true, workspaceTitle: '', workspaceTitleConfigured: false };
   }
 
   function normalizeState(raw) {
@@ -44,6 +44,7 @@
     value.events = Array.isArray(source.events) ? source.events : [];
     value.plans = Array.isArray(source.plans) ? source.plans : [];
     value.workspaceTitle = typeof source.workspaceTitle === 'string' ? source.workspaceTitle : '';
+    value.workspaceTitleConfigured = source.workspaceTitleConfigured === true;
 
     if (source.welcomeCalendarInitialized !== true && value.events.length === 0 && value.plans.length === 0) {
       const examples = makeWelcomeSchedule();
@@ -54,7 +55,7 @@
 
     value.plans.forEach((plan) => {
       if (plan.type === 'daily' && !plan.date) plan.date = dateKey(today);
-      if (plan.type === 'daily' && typeof plan.completed !== 'boolean') plan.completed = false;
+      if (typeof plan.completed !== 'boolean') plan.completed = false;
     });
     value.events.forEach((event) => {
       if (!event.date) event.date = dateKey(today);
@@ -65,8 +66,9 @@
       }
     });
     value.plans.filter((plan) => plan.type === 'daily').forEach((plan) => {
-      const linked = value.events.some((event) => event.planId === plan.id);
+      const linked = value.events.find((event) => event.planId === plan.id);
       if (!linked) value.events.push({ id: `e-${plan.id}`, planId: plan.id, date: plan.date || dateKey(today), title: plan.title || '未命名行程', start: plan.start || '', end: plan.end || '', location: plan.location || '', completed: Boolean(plan.completed) });
+      else plan.completed = Boolean(linked.completed);
     });
     return value;
   }
@@ -200,7 +202,7 @@
       const periodPlans = state.plans.filter((plan) => plan.type !== 'daily' && planCoversDate(plan, key));
       const items = [
         ...dayEvents.map((event) => ({ id: getPlanForEvent(event).id, title: event.title, completed: event.completed, kind: 'event' })),
-        ...periodPlans.map((plan) => ({ id: plan.id, title: plan.title, completed: false, kind: 'period' }))
+        ...periodPlans.map((plan) => ({ id: plan.id, title: plan.title, completed: Boolean(plan.completed), kind: 'period' }))
       ];
       const classes = ['calendar-day'];
       if (day.getMonth() !== calendarMonth.getMonth()) classes.push('outside-month');
@@ -224,34 +226,33 @@
       const time = event.start && event.end ? `${escapeHtml(event.start)}–${escapeHtml(event.end)}` : '全天';
       return `<button type="button" class="agenda-event-card${event.completed ? ' is-complete' : ''}" data-open-plan-id="${escapeHtml(plan.id)}"><span class="agenda-event-time">${time}</span><span class="agenda-event-copy"><strong>${escapeHtml(event.title)}</strong><small>${escapeHtml(event.location || '未設定地點')}</small></span><span class="agenda-event-arrow">›</span></button>`;
     }).join('');
-    const periodRows = periodPlans.map((plan) => `<button type="button" class="period-agenda-row" data-open-plan-id="${escapeHtml(plan.id)}"><span class="period-agenda-tag">${planTypeLabels[plan.type]}</span><strong>${escapeHtml(plan.title)}</strong><span class="agenda-event-arrow">›</span></button>`).join('');
+    const periodRows = periodPlans.map((plan) => `<button type="button" class="period-agenda-row${plan.completed ? ' is-complete' : ''}" data-open-plan-id="${escapeHtml(plan.id)}"><span class="period-agenda-tag">${planTypeLabels[plan.type]}</span><strong>${escapeHtml(plan.title)}</strong><span class="agenda-event-arrow">›</span></button>`).join('');
     document.getElementById('timeline').innerHTML = total ? `${rows}${periodRows}` : '<div class="empty-day">這一天還沒有行程。使用下方「新增行程」來安排。</div>';
   }
 
   function renderTodos() {
-    const incomplete = state.events.filter((event) => !event.completed).sort((a, b) => `${a.date} ${a.start || ''}`.localeCompare(`${b.date} ${b.start || ''}`));
-    const complete = state.events.filter((event) => event.completed).length;
-    const total = state.events.length;
+    const incomplete = state.plans.filter((plan) => !plan.completed).sort((a, b) => `${a.date || a.month || a.year || ''} ${a.start || ''}`.localeCompare(`${b.date || b.month || b.year || ''} ${b.start || ''}`));
+    const complete = state.plans.filter((plan) => plan.completed).length;
+    const total = state.plans.length;
     document.getElementById('todo-count').textContent = incomplete.length;
     document.getElementById('nav-todo-count').textContent = incomplete.length;
     document.getElementById('progress-text').textContent = `${complete} / ${total}`;
     document.getElementById('progress-fill').style.width = `${total ? Math.round(complete / total * 100) : 0}%`;
     const list = document.getElementById('task-list');
     if (!incomplete.length) {
-      list.innerHTML = '<div class="empty-todos">目前沒有待辦行程。新增每日行程後會自動列在這裡。</div>';
+      list.innerHTML = '<div class="empty-todos">目前沒有待辦計畫。新增每日、月或年度計畫後會自動列在這裡。</div>';
       return;
     }
-    list.innerHTML = incomplete.map((event) => {
-      const plan = getPlanForEvent(event);
-      const time = event.start && event.end ? `${event.start}–${event.end}` : '全天';
-      return `<article class="todo-row"><button class="task-checkbox" type="button" data-complete-event="${escapeHtml(event.id)}" aria-label="標記完成：${escapeHtml(event.title)}" aria-pressed="false"></button><button class="todo-event-copy" type="button" data-open-plan-id="${escapeHtml(plan.id)}"><strong>${escapeHtml(event.title)}</strong><span>${escapeHtml(formatPlanDate({ type: 'daily', date: event.date }))} · ${escapeHtml(time)}</span></button></article>`;
+    list.innerHTML = incomplete.map((plan) => {
+      const time = plan.type === 'daily' && plan.start && plan.end ? ` · ${plan.start}–${plan.end}` : '';
+      return `<article class="todo-row"><button class="task-checkbox" type="button" data-complete-plan-id="${escapeHtml(plan.id)}" aria-label="標記完成：${escapeHtml(plan.title)}" aria-pressed="false"></button><button class="todo-event-copy" type="button" data-open-plan-id="${escapeHtml(plan.id)}"><strong>${escapeHtml(plan.title)}</strong><span>${escapeHtml(formatPlanDate(plan))}${escapeHtml(time)}</span></button></article>`;
     }).join('');
   }
 
   function renderSavedPlans() {
     const plans = state.plans.slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
     const list = document.getElementById('plan-list');
-    list.innerHTML = plans.length ? plans.map((plan) => `<button type="button" class="saved-plan" data-open-plan-id="${escapeHtml(plan.id)}"><span class="saved-plan-copy"><span class="saved-plan-type">${planTypeLabels[plan.type] || '行程'} · ${escapeHtml(formatPlanDate(plan))}</span><strong>${escapeHtml(plan.title)}</strong></span><span class="saved-plan-arrow">›</span></button>`).join('') : '<p class="empty-plans">尚未儲存計畫。</p>';
+    list.innerHTML = plans.length ? plans.map((plan) => `<button type="button" class="saved-plan${plan.completed ? ' is-complete' : ''}" data-open-plan-id="${escapeHtml(plan.id)}"><span class="saved-plan-copy"><span class="saved-plan-type">${planTypeLabels[plan.type] || '行程'} · ${escapeHtml(formatPlanDate(plan))}</span><strong>${escapeHtml(plan.title)}</strong></span><span class="saved-plan-arrow">›</span></button>`).join('') : '<p class="empty-plans">尚未儲存計畫。</p>';
   }
 
   function render() {
@@ -310,10 +311,9 @@
     document.getElementById('dialog-time').textContent = plan.type === 'daily' ? (plan.start && plan.end ? `${plan.start}–${plan.end}` : '時間未指定') : '';
     document.getElementById('dialog-location').textContent = plan.location ? `地點：${plan.location}` : '';
     document.getElementById('dialog-notes').textContent = plan.notes ? `備註：${plan.notes}` : '';
-    const linkedEvent = state.events.find((item) => item.planId === plan.id);
     const completeButton = document.getElementById('toggle-complete-button');
-    completeButton.hidden = plan.type !== 'daily';
-    completeButton.textContent = linkedEvent?.completed ? '標記未完成' : '標記完成';
+    completeButton.hidden = false;
+    completeButton.textContent = plan.completed ? '標記未完成' : '標記完成';
     planDialog.showModal();
   }
 
@@ -398,6 +398,7 @@
     cloudReady = true;
     render();
     document.getElementById('account-status').textContent = 'Firestore 已同步';
+    if (!state.workspaceTitleConfigured) openTitleDialog(true);
   }
 
   async function startFirebase() {
@@ -463,17 +464,17 @@
     if (button) openPlanDialog(button.dataset.openPlanId);
   });
   document.getElementById('task-list').addEventListener('click', async (event) => {
-    const completeButton = event.target.closest('[data-complete-event]');
+    const completeButton = event.target.closest('[data-complete-plan-id]');
     const planButton = event.target.closest('[data-open-plan-id]');
     if (planButton) { openPlanDialog(planButton.dataset.openPlanId); return; }
     if (!completeButton) return;
-    const item = state.events.find((entry) => entry.id === completeButton.dataset.completeEvent);
-    if (!item) return;
-    item.completed = true;
-    state.plans.filter((plan) => plan.id === item.planId).forEach((plan) => { plan.completed = true; });
+    const plan = findPlan(completeButton.dataset.completePlanId);
+    if (!plan) return;
+    plan.completed = !plan.completed;
+    state.events.filter((item) => planMatchesEvent(item, plan)).forEach((item) => { item.completed = plan.completed; });
     await save();
     render();
-    showToast('已完成這項行程');
+    showToast(plan.completed ? '已完成這項計畫' : '已恢復為待辦');
   });
 
   document.getElementById('previous-month').addEventListener('click', () => moveCalendarMonth(-1));
@@ -541,26 +542,31 @@
     if (planDialog.open) planDialog.close();
   });
   document.getElementById('toggle-complete-button').addEventListener('click', async () => {
-    const item = state.events.find((event) => event.planId === dialogPlanId);
-    if (!item) return;
-    item.completed = !item.completed;
-    state.plans.filter((plan) => plan.id === dialogPlanId).forEach((plan) => { plan.completed = item.completed; });
+    const plan = findPlan(dialogPlanId);
+    if (!plan) return;
+    plan.completed = !plan.completed;
+    state.events.filter((item) => planMatchesEvent(item, plan)).forEach((item) => { item.completed = plan.completed; });
     await save();
     planDialog.close();
     render();
-    showToast(item.completed ? '已完成行程' : '已恢復為待辦');
+    showToast(plan.completed ? '已完成計畫' : '已恢復為待辦');
   });
   document.querySelectorAll('[data-close-dialog]').forEach((button) => button.addEventListener('click', () => {
     const dialog = document.getElementById(button.dataset.closeDialog);
     if (dialog?.open) dialog.close();
   }));
-  document.getElementById('edit-title-button').addEventListener('click', () => {
-    document.getElementById('title-input').value = state.workspaceTitle || getWorkspaceTitle();
+  function openTitleDialog(firstTime = false) {
+    document.getElementById('title-input').value = state.workspaceTitle || (currentUser?.displayName ? `${currentUser.displayName} 的行事曆` : getWorkspaceTitle());
+    document.getElementById('title-dialog-heading').textContent = firstTime ? '歡迎使用行事曆' : '更改行事曆名稱';
+    document.getElementById('title-dialog-hint').textContent = firstTime ? '替你的行事曆設定名稱，之後點上方標題即可修改。' : '輸入新的行事曆名稱。';
+    document.getElementById('title-submit-label').textContent = firstTime ? '開始使用' : '儲存';
     titleDialog.showModal();
-  });
+  }
+  document.getElementById('workspace-title').addEventListener('click', () => openTitleDialog());
   document.getElementById('title-form').addEventListener('submit', async (event) => {
     event.preventDefault();
     state.workspaceTitle = document.getElementById('title-input').value.trim();
+    state.workspaceTitleConfigured = true;
     await save();
     renderHeader();
     titleDialog.close();
