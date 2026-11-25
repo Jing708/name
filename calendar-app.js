@@ -4,6 +4,9 @@
   const STORAGE_KEY = 'shiguang-planner-v2';
   const FIREBASE_VERSION = '13.4.0';
   const planTypeLabels = { daily: '每日行程', monthly: '月計畫', yearly: '年度計畫' };
+  const priorityLabels = { normal: '一般', medium: '重要', high: '最重要' };
+  const priorityRank = { normal: 0, medium: 1, high: 2 };
+  const comparePriorityThenTime = (a, b) => (priorityRank[b.priority] || 0) - (priorityRank[a.priority] || 0) || (a.start || '').localeCompare(b.start || '');
   const weekdayNames = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
   const today = new Date();
   const dateKey = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
@@ -14,7 +17,6 @@
   let calendarMonth = new Date(today.getFullYear(), today.getMonth(), 1);
   let state;
   let currentUser = null;
-  let cloudReady = false;
   let accountError = '';
   let firebaseServicesPromise = null;
   let editingPlanId = null;
@@ -56,14 +58,18 @@
     value.plans.forEach((plan) => {
       if (plan.type === 'daily' && !plan.date) plan.date = dateKey(today);
       if (typeof plan.completed !== 'boolean') plan.completed = false;
+      if (!priorityRank[plan.priority]) plan.priority = 'normal';
     });
     value.events.forEach((event) => {
       if (!event.date) event.date = dateKey(today);
       if (typeof event.completed !== 'boolean') event.completed = false;
       if (!event.planId) event.planId = `p-${event.id || Date.now()}`;
+      if (!priorityRank[event.priority]) event.priority = 'normal';
       if (!value.plans.some((plan) => plan.id === event.planId)) {
         value.plans.push({ id: event.planId, type: 'daily', title: event.title || '未命名行程', date: event.date, start: event.start || '', end: event.end || '', location: event.location || '', notes: event.notes || '', completed: event.completed, createdAt: event.createdAt || Date.now() });
       }
+      const linkedPlan = value.plans.find((plan) => plan.id === event.planId);
+      event.priority = linkedPlan?.priority || event.priority || 'normal';
     });
     value.plans.filter((plan) => plan.type === 'daily').forEach((plan) => {
       const linked = value.events.find((event) => event.planId === plan.id);
@@ -100,7 +106,6 @@
     if (code === 'auth/popup-blocked') return '瀏覽器封鎖了登入視窗，請允許此網站開啟彈出視窗。';
     if (code === 'auth/popup-closed-by-user') return '登入視窗已關閉，尚未完成登入。';
     if (code === 'auth/network-request-failed') return '網路連線失敗，請確認網路後再試。';
-    if (code === 'permission-denied') return 'Firestore 規則拒絕存取，請確認已發佈使用者專屬規則。';
     return error?.message || 'Firebase 連線失敗，請檢查專案設定。';
   }
 
@@ -108,22 +113,19 @@
     if (!firebaseServicesPromise) {
       firebaseServicesPromise = (async () => {
         const { firebaseConfig } = await import('./firebase-config.js');
-        if (!firebaseConfig?.apiKey || firebaseConfig.apiKey.startsWith('YOUR_') || !firebaseConfig.projectId || firebaseConfig.projectId.startsWith('YOUR_')) {
+        if (!firebaseConfig?.apiKey || firebaseConfig.apiKey.startsWith('YOUR_') || !firebaseConfig.authDomain || !firebaseConfig.appId) {
           throw new Error('Firebase Web app 設定尚未填妥。');
         }
         const base = `https://www.gstatic.com/firebasejs/${FIREBASE_VERSION}`;
-        const [appSdk, authSdk, firestoreSdk] = await Promise.all([
+        const [appSdk, authSdk] = await Promise.all([
           import(`${base}/firebase-app.js`),
-          import(`${base}/firebase-auth.js`),
-          import(`${base}/firebase-firestore.js`)
+          import(`${base}/firebase-auth.js`)
         ]);
         const app = appSdk.initializeApp(firebaseConfig);
         return {
           auth: authSdk.getAuth(app),
           provider: new authSdk.GoogleAuthProvider(),
-          authSdk,
-          firestore: firestoreSdk.getFirestore(app),
-          firestoreSdk
+          authSdk
         };
       })().catch((error) => {
         firebaseServicesPromise = null;
@@ -135,9 +137,17 @@
 
   function updateAccount() {
     const button = document.getElementById('auth-button');
-    document.getElementById('account-name').textContent = currentUser?.displayName || '尚未登入';
-    document.getElementById('account-status').textContent = accountError || (currentUser ? (cloudReady ? 'Firestore 已同步' : '正在同步行程…') : '登入以同步行程');
-    document.getElementById('account-avatar').textContent = currentUser?.displayName?.trim()?.slice(0, 1) || '✳';
+    document.getElementById('account-name').textContent = currentUser?.displayName || currentUser?.email || '尚未登入';
+    document.getElementById('account-status').textContent = accountError || (currentUser ? 'Firebase Auth 已登入 · 行程儲存在此裝置' : '登入以顯示 Google 身分');
+    const avatar = document.getElementById('account-avatar');
+    avatar.replaceChildren();
+    if (currentUser?.photoURL) {
+      const image = document.createElement('img');
+      image.src = currentUser.photoURL;
+      image.alt = `${currentUser.displayName || 'Google'} 頭像`;
+      image.referrerPolicy = 'no-referrer';
+      avatar.append(image);
+    } else avatar.textContent = currentUser?.displayName?.trim()?.slice(0, 1) || currentUser?.email?.slice(0, 1) || '✳';
     button.textContent = currentUser ? '登出' : 'Google 登入';
     button.disabled = false;
   }
@@ -185,7 +195,7 @@
     const linked = state.plans.find((plan) => plan.id === event.planId);
     if (linked) return linked;
     return state.plans.find((plan) => plan.type === 'daily' && plan.title === event.title && plan.date === event.date) || {
-      id: event.planId || event.id, type: 'daily', title: event.title || '未命名行程', date: event.date,
+      id: event.planId || event.id, type: 'daily', title: event.title || '未命名行程', date: event.date, priority: event.priority || 'normal',
       start: event.start || '', end: event.end || '', location: event.location || '', notes: event.notes || '', completed: Boolean(event.completed)
     };
   }
@@ -198,7 +208,7 @@
     for (let index = 0; index < 42; index += 1) {
       const day = new Date(gridStart.getFullYear(), gridStart.getMonth(), gridStart.getDate() + index);
       const key = dateKey(day);
-      const dayEvents = state.events.filter((event) => event.date === key);
+      const dayEvents = state.events.filter((event) => event.date === key).sort(comparePriorityThenTime);
       const periodPlans = state.plans.filter((plan) => plan.type !== 'daily' && planCoversDate(plan, key));
       const items = [
         ...dayEvents.map((event) => ({ id: getPlanForEvent(event).id, title: event.title, completed: event.completed, kind: 'event' })),
@@ -217,14 +227,15 @@
   }
 
   function renderAgenda() {
-    const events = state.events.filter((event) => event.date === selectedDate).sort((a, b) => (a.start || '').localeCompare(b.start || ''));
+    const events = state.events.filter((event) => event.date === selectedDate).sort(comparePriorityThenTime);
     const periodPlans = state.plans.filter((plan) => plan.type !== 'daily' && planCoversDate(plan, selectedDate));
     const total = events.length + periodPlans.length;
     document.getElementById('agenda-count').textContent = total;
     const rows = events.map((event) => {
       const plan = getPlanForEvent(event);
       const time = event.start && event.end ? `${escapeHtml(event.start)}–${escapeHtml(event.end)}` : '全天';
-      return `<button type="button" class="agenda-event-card${event.completed ? ' is-complete' : ''}" data-open-plan-id="${escapeHtml(plan.id)}"><span class="agenda-event-time">${time}</span><span class="agenda-event-copy"><strong>${escapeHtml(event.title)}</strong><small>${escapeHtml(event.location || '未設定地點')}</small></span><span class="agenda-event-arrow">›</span></button>`;
+      const priority = `<small class="priority-label">${priorityLabels[event.priority] || '一般'}</small>`;
+      return `<button type="button" class="agenda-event-card priority-${escapeHtml(event.priority || 'normal')}${event.completed ? ' is-complete' : ''}" data-open-plan-id="${escapeHtml(plan.id)}"><span class="agenda-event-time">${time}</span><span class="agenda-event-copy"><strong>${escapeHtml(event.title)}</strong><small>${escapeHtml(event.location || '未設定地點')}</small></span>${priority}<span class="agenda-event-arrow">›</span></button>`;
     }).join('');
     const periodRows = periodPlans.map((plan) => `<button type="button" class="period-agenda-row${plan.completed ? ' is-complete' : ''}" data-open-plan-id="${escapeHtml(plan.id)}"><span class="period-agenda-tag">${planTypeLabels[plan.type]}</span><strong>${escapeHtml(plan.title)}</strong><span class="agenda-event-arrow">›</span></button>`).join('');
     document.getElementById('timeline').innerHTML = total ? `${rows}${periodRows}` : '<div class="empty-day">這一天還沒有行程。使用下方「新增行程」來安排。</div>';
@@ -309,6 +320,7 @@
     document.getElementById('dialog-title').textContent = plan.title || '未命名行程';
     document.getElementById('dialog-date').textContent = formatPlanDate(plan);
     document.getElementById('dialog-time').textContent = plan.type === 'daily' ? (plan.start && plan.end ? `${plan.start}–${plan.end}` : '時間未指定') : '';
+    document.getElementById('dialog-priority').textContent = `重要程度：${priorityLabels[plan.priority] || '一般'}`;
     document.getElementById('dialog-location').textContent = plan.location ? `地點：${plan.location}` : '';
     document.getElementById('dialog-notes').textContent = plan.notes ? `備註：${plan.notes}` : '';
     const completeButton = document.getElementById('toggle-complete-button');
@@ -338,6 +350,7 @@
     form.reset();
     planTypeInput.value = plan.type || 'daily';
     document.getElementById('plan-title').value = plan.title || '';
+    document.getElementById('plan-priority').value = plan.priority || 'normal';
     document.getElementById('daily-date').value = plan.date || selectedDate;
     document.getElementById('plan-month').value = plan.month || plan.startDate || '';
     document.getElementById('plan-year').value = plan.year || plan.startDate || '';
@@ -364,16 +377,8 @@
   }
 
   async function save() {
-    if (!currentUser) {
-      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
-      catch (error) { console.warn('本機儲存失敗。', error); showToast('本機儲存失敗，請檢查瀏覽器設定。'); }
-      return;
-    }
-    if (!cloudReady) { showToast('雲端資料仍在載入，請稍後再儲存。'); return; }
-    try {
-      const { firestore, firestoreSdk } = await getFirebaseServices();
-      await firestoreSdk.setDoc(firestoreSdk.doc(firestore, 'users', currentUser.uid, 'planner', 'state'), state);
-    } catch (error) { console.error(error); showToast(firebaseErrorMessage(error)); }
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+    catch (error) { console.warn('本機儲存失敗。', error); showToast('本機儲存失敗，請檢查瀏覽器設定。'); }
   }
 
   function setPlannerState(raw) {
@@ -381,23 +386,12 @@
     render();
   }
 
-  async function loadUserState(user, services) {
+  async function loadUserState(user) {
     currentUser = user;
-    cloudReady = false;
     accountError = '';
-    updateAccount();
-    const reference = services.firestoreSdk.doc(services.firestore, 'users', user.uid, 'planner', 'state');
-    const snapshot = await services.firestoreSdk.getDoc(reference);
-    if (snapshot.exists()) {
-      state = normalizeState(snapshot.data());
-      await services.firestoreSdk.setDoc(reference, state);
-    } else {
-      state = loadLocalState();
-      await services.firestoreSdk.setDoc(reference, state);
-    }
-    cloudReady = true;
+    state = loadLocalState();
     render();
-    document.getElementById('account-status').textContent = 'Firestore 已同步';
+    document.getElementById('account-status').textContent = 'Firebase Auth 已登入 · 行程儲存在此裝置';
     if (!state.workspaceTitleConfigured) openTitleDialog(true);
   }
 
@@ -409,17 +403,15 @@
       const services = await getFirebaseServices();
       services.authSdk.onAuthStateChanged(services.auth, async (user) => {
         try {
-          if (user) await loadUserState(user, services);
+          if (user) await loadUserState(user);
           else {
             currentUser = null;
-            cloudReady = false;
             accountError = '';
             state = loadLocalState();
             render();
           }
         } catch (error) {
           console.error(error);
-          cloudReady = false;
           accountError = firebaseErrorMessage(error);
           showToast(firebaseErrorMessage(error));
         }
@@ -437,6 +429,8 @@
 
   document.getElementById('auth-button').addEventListener('click', async () => {
     try {
+      accountError = '';
+      updateAccount();
       const services = await getFirebaseServices();
       if (currentUser) await services.authSdk.signOut(services.auth);
       else await services.authSdk.signInWithPopup(services.auth, services.provider);
@@ -495,7 +489,8 @@
     if (!title) { document.getElementById('plan-title').focus(); return; }
     const previous = editingPlanId ? findPlan(editingPlanId) : null;
     const id = previous?.id || `p-${Date.now()}`;
-    const nextPlan = { id, type, title, notes: String(values.get('notes') || '').trim(), createdAt: previous?.createdAt || Date.now(), completed: previous?.completed || false };
+    const priority = String(values.get('priority') || 'normal');
+    const nextPlan = { id, type, title, priority: priorityRank[priority] !== undefined ? priority : 'normal', notes: String(values.get('notes') || '').trim(), createdAt: previous?.createdAt || Date.now(), completed: previous?.completed || false };
     if (type === 'daily') {
       nextPlan.date = String(values.get('date') || '');
       nextPlan.start = String(values.get('start') || '');
@@ -517,7 +512,7 @@
       state.events = state.events.filter((item) => !planMatchesEvent(item, previous));
     } else state.plans.push(nextPlan);
     if (type === 'daily') {
-      state.events.push({ id: previous && state.events.some((item) => item.id === `e-${id}`) ? `e-${id}` : `e-${Date.now()}`, planId: id, date: nextPlan.date, title, start: nextPlan.start, end: nextPlan.end, location: nextPlan.location, completed: nextPlan.completed });
+      state.events.push({ id: previous && state.events.some((item) => item.id === `e-${id}`) ? `e-${id}` : `e-${Date.now()}`, planId: id, date: nextPlan.date, title, priority: nextPlan.priority, start: nextPlan.start, end: nextPlan.end, location: nextPlan.location, completed: nextPlan.completed });
       selectedDate = nextPlan.date;
       const date = new Date(`${selectedDate}T00:00:00`);
       calendarMonth = new Date(date.getFullYear(), date.getMonth(), 1);

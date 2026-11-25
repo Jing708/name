@@ -16,7 +16,7 @@
       <a class="brand" href="#calendar" aria-label="行事曆首頁"><span class="brand-icon">✳</span><span>拾光<span class="brand-dot">.</span></span></a>
       <div class="account-card" id="account-card">
         <div class="account-avatar" id="account-avatar">✳</div>
-        <div class="account-copy"><strong id="account-name">尚未登入</strong><span id="account-status">登入以同步行程</span></div>
+        <div class="account-copy"><strong id="account-name">尚未登入</strong><span id="account-status">登入以顯示 Google 身分</span></div>
         <button id="auth-button" class="auth-button" type="button">Google 登入</button>
       </div>
       <p class="nav-label">工作空間</p>
@@ -79,6 +79,7 @@
               </select>
             </label>
             <label>標題<input name="title" id="plan-title" required maxlength="60" placeholder="輸入行程名稱"></label>
+            <label>重要程度<select name="priority" id="plan-priority"><option value="normal">一般</option><option value="medium">重要</option><option value="high">最重要</option></select></label>
             <label class="date-field daily-field">日期（年／月／日）<input name="date" id="daily-date" type="date" required></label>
             <label class="date-field monthly-field" hidden>選擇月份<input name="month" id="plan-month" type="month" required></label>
             <label class="date-field yearly-field" hidden>選擇年份<input name="year" id="plan-year" type="number" min="1900" max="2100" step="1" required placeholder="例如 2026"></label>
@@ -102,6 +103,7 @@
     <h2 id="dialog-title"></h2>
     <p id="dialog-date" class="dialog-date"></p>
     <p id="dialog-time" class="dialog-time"></p>
+    <p id="dialog-priority" class="dialog-detail"></p>
     <p id="dialog-location" class="dialog-detail"></p>
     <p id="dialog-notes" class="dialog-detail"></p>
     <div class="dialog-actions"><button class="secondary-button" id="toggle-complete-button" type="button" hidden>標記完成</button><button class="danger-button" id="delete-plan-button" type="button">刪除</button><button class="primary-button" id="edit-plan-button" type="button">更改</button></div>
