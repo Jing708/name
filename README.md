@@ -15,7 +15,7 @@ Firebase Web 設定中的 API key 是前端公開設定；Google 密碼不會交
 
 ## GitHub Pages 部署
 
-將這個資料夾的內容上傳至 GitHub repository 的根目錄，並使用 `main` 分支。`.github/workflows/pages.yml` 會在推送後自動部署至 GitHub Pages。第一次部署前，進入 repository Settings > Pages，將 Build and deployment 的 Source 設為 GitHub Actions。完成後，於 Actions 確認 Deploy to GitHub Pages 工作成功，Pages 網址會顯示在部署結果中。
+GitHub Pages 已設定為直接從 `main` 分支根目錄發布。將程式推送到 `main` 後，GitHub Pages 會自動更新網站。若重新設定，請到 repository Settings > Pages，將 Source 設為 Deploy from a branch，分支選 `main`、資料夾選 `/(root)`。
 
 ## 功能
 
