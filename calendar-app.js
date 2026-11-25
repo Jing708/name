@@ -2,6 +2,8 @@
   'use strict';
 
   const STORAGE_KEY = 'shiguang-planner-v2';
+  const CLOUD_MIGRATION_KEY = 'shiguang-planner-cloud-migrated-v1';
+  const CLOUD_META_ID = 'meta';
   const FIREBASE_VERSION = '13.4.0';
   const planTypeLabels = { daily: '每日行程', monthly: '月計畫', yearly: '年度計畫' };
   const priorityLabels = { normal: '一般', medium: '重要', high: '最重要' };
@@ -19,6 +21,9 @@
   let currentUser = null;
   let accountError = '';
   let firebaseServicesPromise = null;
+  let cloudStateReady = false;
+  let cloudPlanCache = new Map();
+  let cloudMetadataCache = null;
   let editingPlanId = null;
   let dialogPlanId = null;
   let toastTimer;
@@ -56,6 +61,9 @@
     value.welcomeCalendarInitialized = true;
 
     value.plans.forEach((plan) => {
+      if (typeof plan.title !== 'string' || !plan.title.trim()) plan.title = '未命名行程';
+      if (typeof plan.notes !== 'string') plan.notes = '';
+      if (!Number.isSafeInteger(plan.createdAt) || plan.createdAt <= 0) plan.createdAt = Date.now();
       if (plan.type === 'daily' && !plan.date) plan.date = dateKey(today);
       if (typeof plan.completed !== 'boolean') plan.completed = false;
       if (!priorityRank[plan.priority]) plan.priority = 'normal';
@@ -77,6 +85,13 @@
       else plan.completed = Boolean(linked.completed);
     });
     return value;
+  }
+
+  function emptyLocalState() {
+    return normalizeState({
+      events: [], plans: [], workspaceTitle: '', workspaceTitleConfigured: false,
+      welcomeCalendarInitialized: true
+    });
   }
 
   function loadLocalState() {
@@ -106,6 +121,8 @@
     if (code === 'auth/popup-blocked') return '瀏覽器封鎖了登入視窗，請允許此網站開啟彈出視窗。';
     if (code === 'auth/popup-closed-by-user') return '登入視窗已關閉，尚未完成登入。';
     if (code === 'auth/network-request-failed') return '網路連線失敗，請確認網路後再試。';
+    if (code === 'firestore/permission-denied') return 'Firestore 拒絕存取，請檢查專案安全規則。';
+    if (code === 'unavailable' || code === 'firestore/unavailable') return 'Firestore 暫時無法連線，請檢查網路後重試。';
     return error?.message || 'Firebase 連線失敗，請檢查專案設定。';
   }
 
@@ -117,15 +134,18 @@
           throw new Error('Firebase Web app 設定尚未填妥。');
         }
         const base = `https://www.gstatic.com/firebasejs/${FIREBASE_VERSION}`;
-        const [appSdk, authSdk] = await Promise.all([
+        const [appSdk, authSdk, firestoreSdk] = await Promise.all([
           import(`${base}/firebase-app.js`),
-          import(`${base}/firebase-auth.js`)
+          import(`${base}/firebase-auth.js`),
+          import(`${base}/firebase-firestore.js`)
         ]);
         const app = appSdk.initializeApp(firebaseConfig);
         return {
           auth: authSdk.getAuth(app),
           provider: new authSdk.GoogleAuthProvider(),
-          authSdk
+          authSdk,
+          firestore: firestoreSdk.getFirestore(app),
+          firestoreSdk
         };
       })().catch((error) => {
         firebaseServicesPromise = null;
@@ -138,7 +158,7 @@
   function updateAccount() {
     const button = document.getElementById('auth-button');
     document.getElementById('account-name').textContent = currentUser?.displayName || currentUser?.email || '尚未登入';
-    document.getElementById('account-status').textContent = accountError || (currentUser ? 'Firebase Auth 已登入 · 行程儲存在此裝置' : '登入以顯示 Google 身分');
+    document.getElementById('account-status').textContent = accountError || (currentUser ? (cloudStateReady ? 'Firebase 已登入 · 行程已同步至雲端' : 'Firebase 已登入 · 正在載入行程…') : '登入以載入你的雲端行程');
     const avatar = document.getElementById('account-avatar');
     avatar.replaceChildren();
     if (currentUser?.photoURL) {
@@ -333,12 +353,12 @@
     return event.planId === plan.id || (!event.planId && plan.type === 'daily' && event.title === plan.title && event.date === plan.date);
   }
 
-  function deletePlan(planId) {
+  async function deletePlan(planId) {
     const plan = findPlan(planId);
     if (!plan) return;
     state.plans = state.plans.filter((item) => item.id !== plan.id);
     state.events = state.events.filter((event) => !planMatchesEvent(event, plan));
-    save();
+    if (!await save()) { render(); return; }
     render();
     showToast('已刪除行程');
   }
@@ -376,9 +396,71 @@
     render();
   }
 
+  function getPlannerCollection(services, userId) {
+    return services.firestoreSdk.collection(services.firestore, 'users', userId, 'planner');
+  }
+
+  function serializablePlan(plan) {
+    const fields = ['id', 'type', 'title', 'priority', 'notes', 'createdAt', 'completed', 'date', 'month', 'year', 'start', 'end', 'location'];
+    return Object.fromEntries(fields.filter((field) => plan[field] !== undefined).map((field) => [field, plan[field]]));
+  }
+
+  function getCloudMetadata() {
+    return {
+      workspaceTitle: state.workspaceTitle,
+      workspaceTitleConfigured: state.workspaceTitleConfigured === true
+    };
+  }
+
+  async function writeCloudState(services, userId, {forceAll = false} = {}) {
+    const sdk = services.firestoreSdk;
+    const collectionRef = getPlannerCollection(services, userId);
+    const nextPlans = new Map(state.plans.filter((plan) => !plan.isSample).map((plan) => [String(plan.id), serializablePlan(plan)]));
+    const nextMetadata = getCloudMetadata();
+    const batch = sdk.writeBatch(services.firestore);
+    let writes = 0;
+
+    nextPlans.forEach((plan, id) => {
+      if (forceAll || JSON.stringify(plan) !== JSON.stringify(cloudPlanCache.get(id))) {
+        batch.set(sdk.doc(collectionRef, id), plan);
+        writes += 1;
+      }
+    });
+    cloudPlanCache.forEach((_, id) => {
+      if (!nextPlans.has(id)) {
+        batch.delete(sdk.doc(collectionRef, id));
+        writes += 1;
+      }
+    });
+    if (forceAll || JSON.stringify(nextMetadata) !== JSON.stringify(cloudMetadataCache)) {
+      batch.set(sdk.doc(collectionRef, CLOUD_META_ID), nextMetadata);
+      writes += 1;
+    }
+
+    if (writes > 500) throw new Error('單次同步行程超過 Firestore 寫入上限，請分批刪減後再試。');
+    if (writes) await batch.commit();
+    cloudPlanCache = nextPlans;
+    cloudMetadataCache = nextMetadata;
+  }
+
   async function save() {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
-    catch (error) { console.warn('本機儲存失敗。', error); showToast('本機儲存失敗，請檢查瀏覽器設定。'); }
+    try {
+      if (currentUser && cloudStateReady) {
+        const services = await getFirebaseServices();
+        await writeCloudState(services, currentUser.uid);
+        accountError = '';
+        updateAccount();
+      } else {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      }
+      return true;
+    } catch (error) {
+      console.error('儲存行程失敗。', error);
+      accountError = currentUser ? '雲端同步失敗，請確認網路或 Firebase 規則後重試。' : '本機儲存失敗，請檢查瀏覽器設定。';
+      updateAccount();
+      showToast(accountError);
+      return false;
+    }
   }
 
   function setPlannerState(raw) {
@@ -386,12 +468,77 @@
     render();
   }
 
-  async function loadUserState(user) {
+  async function loadUserState(user, services) {
     currentUser = user;
     accountError = '';
-    state = loadLocalState();
+    cloudStateReady = false;
+    cloudPlanCache = new Map();
+    cloudMetadataCache = null;
     render();
-    document.getElementById('account-status').textContent = 'Firebase Auth 已登入 · 行程儲存在此裝置';
+    document.getElementById('account-status').textContent = 'Firebase 已登入 · 正在載入行程…';
+
+    const sdk = services.firestoreSdk;
+    const collectionRef = getPlannerCollection(services, user.uid);
+    const [plansSnapshot, metadataSnapshot] = await Promise.all([
+      sdk.getDocs(collectionRef),
+      sdk.getDoc(sdk.doc(collectionRef, CLOUD_META_ID))
+    ]);
+    const cloudPlans = new Map();
+    plansSnapshot.forEach((snapshot) => {
+      if (snapshot.id !== CLOUD_META_ID && snapshot.id !== 'state') {
+        cloudPlans.set(snapshot.id, serializablePlan({id: snapshot.id, ...snapshot.data()}));
+      }
+    });
+    const legacyStateSnapshot = await sdk.getDoc(sdk.doc(collectionRef, 'state'));
+    const migrationKey = `${CLOUD_MIGRATION_KEY}:${user.uid}`;
+    const localOwner = localStorage.getItem(`${CLOUD_MIGRATION_KEY}:owner`);
+    const isFirstCloudLogin = cloudPlans.size === 0 && !metadataSnapshot.exists() && !legacyStateSnapshot.exists() && !localStorage.getItem(migrationKey);
+
+    if (cloudPlans.size === 0 && legacyStateSnapshot.exists() && !metadataSnapshot.exists()) {
+      const legacy = legacyStateSnapshot.data();
+      state = normalizeState({
+        ...legacy,
+        events: Array.isArray(legacy.events) ? legacy.events.filter((event) => !event.isSample) : [],
+        plans: Array.isArray(legacy.plans) ? legacy.plans.filter((plan) => !plan.isSample) : [],
+        welcomeCalendarInitialized: true
+      });
+      cloudPlanCache = new Map();
+      cloudMetadataCache = null;
+      cloudStateReady = true;
+      await writeCloudState(services, user.uid, {forceAll: true});
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(emptyLocalState()));
+      localStorage.setItem(migrationKey, '1');
+      localStorage.setItem(`${CLOUD_MIGRATION_KEY}:owner`, user.uid);
+    } else if (isFirstCloudLogin && (!localOwner || localOwner === user.uid)) {
+      const localState = loadLocalState();
+      state = normalizeState({
+        ...localState,
+        events: [],
+        plans: localState.plans.filter((plan) => !plan.isSample),
+        welcomeCalendarInitialized: true
+      });
+      cloudPlanCache = new Map();
+      cloudMetadataCache = null;
+      cloudStateReady = true;
+      await writeCloudState(services, user.uid, {forceAll: true});
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(emptyLocalState()));
+      localStorage.setItem(migrationKey, '1');
+      localStorage.setItem(`${CLOUD_MIGRATION_KEY}:owner`, user.uid);
+    } else {
+      const metadata = metadataSnapshot.exists() ? metadataSnapshot.data() : {};
+      state = normalizeState({
+        events: [],
+        plans: Array.from(cloudPlans.values()),
+        workspaceTitle: typeof metadata.workspaceTitle === 'string' ? metadata.workspaceTitle : '',
+        workspaceTitleConfigured: metadata.workspaceTitleConfigured === true,
+        welcomeCalendarInitialized: true
+      });
+      cloudPlanCache = cloudPlans;
+      cloudMetadataCache = metadataSnapshot.exists() ? getCloudMetadata() : null;
+      cloudStateReady = true;
+      localStorage.setItem(migrationKey, '1');
+    }
+    render();
     if (!state.workspaceTitleConfigured) openTitleDialog(true);
   }
 
@@ -403,11 +550,15 @@
       const services = await getFirebaseServices();
       services.authSdk.onAuthStateChanged(services.auth, async (user) => {
         try {
-          if (user) await loadUserState(user);
+          if (user) await loadUserState(user, services);
           else {
+            const migratedOwner = localStorage.getItem(`${CLOUD_MIGRATION_KEY}:owner`);
             currentUser = null;
             accountError = '';
-            state = loadLocalState();
+            cloudStateReady = false;
+            cloudPlanCache = new Map();
+            cloudMetadataCache = null;
+            state = migratedOwner ? emptyLocalState() : loadLocalState();
             render();
           }
         } catch (error) {
@@ -466,7 +617,7 @@
     if (!plan) return;
     plan.completed = !plan.completed;
     state.events.filter((item) => planMatchesEvent(item, plan)).forEach((item) => { item.completed = plan.completed; });
-    await save();
+    if (!await save()) { render(); return; }
     render();
     showToast(plan.completed ? '已完成這項計畫' : '已恢復為待辦');
   });
@@ -524,7 +675,7 @@
       selectedDate = `${nextPlan.year}-01-01`;
       calendarMonth = new Date(Number(nextPlan.year), 0, 1);
     }
-    await save();
+    if (!await save()) { render(); return; }
     resetPlanForm();
     render();
     showToast(previous ? '行程已更新' : `${planTypeLabels[type]}已新增`);
@@ -532,8 +683,8 @@
 
   document.getElementById('cancel-edit-button').addEventListener('click', resetPlanForm);
   document.getElementById('edit-plan-button').addEventListener('click', () => { if (dialogPlanId) beginPlanEdit(dialogPlanId); });
-  document.getElementById('delete-plan-button').addEventListener('click', () => {
-    if (dialogPlanId) deletePlan(dialogPlanId);
+  document.getElementById('delete-plan-button').addEventListener('click', async () => {
+    if (dialogPlanId) await deletePlan(dialogPlanId);
     if (planDialog.open) planDialog.close();
   });
   document.getElementById('toggle-complete-button').addEventListener('click', async () => {
@@ -541,7 +692,7 @@
     if (!plan) return;
     plan.completed = !plan.completed;
     state.events.filter((item) => planMatchesEvent(item, plan)).forEach((item) => { item.completed = plan.completed; });
-    await save();
+    if (!await save()) return;
     planDialog.close();
     render();
     showToast(plan.completed ? '已完成計畫' : '已恢復為待辦');
@@ -562,7 +713,7 @@
     event.preventDefault();
     state.workspaceTitle = document.getElementById('title-input').value.trim();
     state.workspaceTitleConfigured = true;
-    await save();
+    if (!await save()) return;
     renderHeader();
     titleDialog.close();
     showToast('行事曆名稱已儲存');
